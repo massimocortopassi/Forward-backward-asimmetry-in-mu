@@ -18,11 +18,11 @@ void afb_fit() {
 
     const char* files[] = {
         //"zdec_da9300.root"
-        "zdec_da9125_quart.root"
+        //"zdec_da9125_quart.root"
         //"zdec_da8950.root"
         //"zdec_hadr.root"
         //"zdec_taus.root"
-        //"zdec_muon.root"
+        "zdec_muon.root"
     };
 
     int num_files = sizeof(files) / sizeof(files[0]);
@@ -30,7 +30,7 @@ void afb_fit() {
     TH1D* h = new TH1D(
         "h",
         ";cos#theta*; Events",
-        60, -0.9, 0.9
+        45, -0.9, 0.9
     );
 
     // --- NUOVO: CONTATORE EVENTI INIZIALI ---
@@ -86,7 +86,7 @@ void afb_fit() {
             tree->GetEntry(i);
 
             // Taglio sull'energia nel centro di massa (entro 1 GeV dal picco della Z)
-            if (std::abs(Elep - 91.25) >= 1.0) continue;
+            if (std::abs(Elep - 91.19) >= 1.0) continue;
 
             // 1. Taglio sul numero di tracce cariche (esattamente 2)
             if (Nch != 2) continue;
@@ -101,30 +101,18 @@ void afb_fit() {
             if (std::abs(cos_traccia1) >= 0.9 || std::abs(cos_traccia2) >= 0.9) continue;
 
             // 0. Taglio sul numero di hits
-            if (Nhits[0] <= 3 && Nhits[1] <= 3) continue;
+            if (Nhits[0] < 4 && Nhits[1] < 4) continue;
 
             // 2. Taglio di qualità sui piani del rivelatore
+            // Almeno UNA traccia deve avere > 3 hits negli ultimi piani dell'HCAL
             if (Nplanes[0] <= 3 && Nplanes[1] <= 3) continue;
 
             // 3. Taglio sul parametro d'impatto (D0 < 0.5 cm per entrambe le tracce)
             if (fabs(D0[0]) >= 0.5 || fabs(D0[1]) >= 0.5) continue;
 
             if (fabs(Z0[0]) >= 4 || fabs(Z0[1]) >= 4) continue;
-            
-            // --- 4. TAGLIO SULL'ENERGIA (ECAL + HCAL) ---
-                        // Soppressione del fondo di tau+tau- ed e+e- come da paper ALEPH
 
-                        // Somma dell'energia nei calorimetri per la prima e la seconda traccia
-            double E_sum1 = Eec[0] + Ehc[0];
-            double E_sum2 = Eec[1] + Ehc[1];
 
-            // Trovo il valore massimo e minimo tra le due tracce
-            double E_max = std::max(E_sum1, E_sum2);
-            double E_min = std::min(E_sum1, E_sum2);
-
-            // Applico le condizioni: max < 25 AND min < 12
-            // Quindi scarto l'evento (continue) se max >= 25 OPPURE min >= 12
-            if (E_max >= 25.0 || E_min >= 12.0) continue;
             // --------------------------------------------
 
             // 5. Taglio geometrico sull'asse di thrust????????????????????????????????????????'
@@ -233,27 +221,42 @@ void afb_fit() {
     );
 
 
-    TCanvas* c = new TCanvas("c", "Asimmetria Forward-Backward", 800, 600);
-    // --- FORZA IL MINIMO DELL'ASSE Y A ZERO ---
+    // --- CREAZIONE DEL CANVAS E DIVISIONE IN PAD ---
+    // Aumentiamo un po' l'altezza del canvas per far spazio ai residui
+    TCanvas* c = new TCanvas("c", "Asimmetria Forward-Backward", 800, 800);
+
+    // Pad superiore per il fit
+    TPad* pad1 = new TPad("pad1", "pad1", 0, 0.3, 1, 1.0);
+    pad1->SetBottomMargin(0.02); // Rimuove il margine inferiore per incollarlo al pad sotto
+    pad1->Draw();
+
+    // Pad inferiore per i residui
+    TPad* pad2 = new TPad("pad2", "pad2", 0, 0.0, 1, 0.3);
+    pad2->SetTopMargin(0.02);    // Rimuove il margine superiore
+    pad2->SetBottomMargin(0.3);  // Lascia spazio per i titoli dell'asse X
+    pad2->Draw();
+
+    // ---------------------------------------------------------
+    // --- DISEGNO NEL PAD SUPERIORE (GRAFICO ORIGINALE) ---
+    pad1->cd();
+
     h->SetMinimum(0.0);
+    h->SetMaximum(h->GetMaximum() * 1.3);
 
-    // Opzionale: aggiungi un po' di spazio sopra il picco massimo
-    h->SetMaximum(h->GetMaximum() * 1.3);  // Aumentato per fare spazio alla label
-
-    // Modifica il titolo per includere l'energia nel centro di massa
-    h->SetTitle("#sqrt{s} = 91.19 GeV;cos#theta*; Events");
+    // Rimuoviamo il titolo dell'asse X qui, lo metteremo nel pad inferiore
+    h->SetTitle("#sqrt{s} = 91.19 GeV;; Events");
+    h->GetXaxis()->SetLabelSize(0); // Nasconde i numeri sull'asse X del pad superiore
 
     h->Draw("HIST E");
     fit->Draw("same");
 
-    // Crea la NUOVA label che SOSTITUISCE quella vecchia
-    TPaveText* label = new TPaveText(0.15, 0.75, 0.45, 0.89, "NDC");
+    // Crea la label
+    TPaveText* label = new TPaveText(0.15, 0.70, 0.45, 0.89, "NDC");
     label->SetFillColor(0);
     label->SetTextFont(42);
-    label->SetTextSize(0.035);
+    label->SetTextSize(0.04);
     label->SetBorderSize(0);
 
-    // Formatta le stringhe con i valori
     std::stringstream ss;
     ss << "Entries: " << std::fixed << std::setprecision(0) << h->GetEntries();
     label->AddText(ss.str().c_str());
@@ -276,21 +279,62 @@ void afb_fit() {
 
     label->Draw("same");
 
+    // ---------------------------------------------------------
+    // (RESIDUI NORMALIZZATI) ---
+    pad2->cd();
+
+    // Cloniamo l'istogramma per mantenere la stessa binning
+    TH1D* h_res = (TH1D*)h->Clone("h_res");
+    h_res->Reset(); // Svuotiamo il contenuto
+    h_res->SetTitle("");
+
+    // Calcolo dei residui normalizzati
+    for (int i = 1; i <= h->GetNbinsX(); i++) {
+        double data = h->GetBinContent(i);
+        double err = h->GetBinError(i);
+        double x = h->GetBinCenter(i);
+        double fit_val = fit->Eval(x);
+
+        if (err > 0) {
+            h_res->SetBinContent(i, (data - fit_val) / err);
+            h_res->SetBinError(i, 0.0); // Nessun errore sulle barre Y per chiarezza visiva
+        }
+    }
+
+    // Configurazione assi per il pad inferiore (devono essere più grandi perché il pad è piccolo)
+    h_res->GetYaxis()->SetTitle("(Data-Fit)/#sigma");
+    h_res->GetYaxis()->SetNdivisions(505); // Configura 5 divisioni principali
+    h_res->GetYaxis()->SetTitleSize(0.10);
+    h_res->GetYaxis()->SetLabelSize(0.08);
+    h_res->GetYaxis()->SetTitleOffset(0.4);
+
+    h_res->GetXaxis()->SetTitle("cos#theta*");
+    h_res->GetXaxis()->SetTitleSize(0.12);
+    h_res->GetXaxis()->SetLabelSize(0.10);
+
+    // Range asse Y per i residui (tipicamente tra -4 e +4 sigma)
+    h_res->SetMinimum(-4.5);
+    h_res->SetMaximum(4.5);
+
+    // Stile dei punti
+    h_res->SetMarkerStyle(20);
+    h_res->SetMarkerSize(0.6);
+    h_res->SetLineColor(kBlack);
+    h_res->Draw("P"); // Disegna solo i punti
+
+    // Linea di riferimento a Y=0 (fit perfetto)
+    TLine* line = new TLine(-0.9, 0, 0.9, 0);
+    line->SetLineColor(kRed);
+    line->SetLineStyle(2);
+    line->SetLineWidth(2);
+    line->Draw("same");
+
+    // Stampa su terminale (invariata)
     std::cout
-        << "chi2 = "
-        << fit->GetChisquare()
-
-        << "\nndf = "
-        << fit->GetNDF()
-
-        << "\nchi2/ndf = "
-        << fit->GetChisquare() / fit->GetNDF()
-
-        << "\nA_FB = "
-        << fit->GetParameter(1)
-
-        << " +- "
-        << fit->GetParError(1)
-
+        << "chi2 = " << fit->GetChisquare()
+        << "\nndf = " << fit->GetNDF()
+        << "\nchi2/ndf = " << fit->GetChisquare() / fit->GetNDF()
+        << "\nA_FB = " << fit->GetParameter(1)
+        << " +- " << fit->GetParError(1)
         << std::endl;
 }
